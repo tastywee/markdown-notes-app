@@ -3,57 +3,73 @@ import "./App.css";
 import Sidebar from "./components/Sidebar";
 import Editor from "./components/Editor";
 import Split from "react-split";
-import { nanoid } from "nanoid";
+import { addDoc, deleteDoc, doc, onSnapshot, setDoc } from "firebase/firestore";
+import { database, notesCollection } from "./firebase";
 
 export default function App() {
-  const [notes, setNotes] = useState(
-    () => JSON.parse(localStorage.getItem("notes")) || []
-  );
+  const [notes, setNotes] = useState([]);
+  const [currentNoteId, setCurrentNoteId] = useState("");
+  const [tempNoteText, setTempNoteText] = useState("");
 
-  const [currentNoteId, setCurrentNoteId] = useState(
-    (notes[0] && notes[0].id) || ""
-  );
+  const currentNote =
+    notes.find((note) => note.id === currentNoteId) || notes[0];
+
+  const sortedNotes = notes.sort((a, b) => b.updatedAt - a.updatedAt);
 
   useEffect(() => {
-    localStorage.setItem("notes", JSON.stringify(notes), [notes]);
-  });
-
-  function createNewNote() {
-    const newNote = {
-      id: nanoid(),
-      body: "# Type your markdown note's title here",
-    };
-    setNotes((prevNotes) => [newNote, ...prevNotes]);
-    setCurrentNoteId(newNote.id);
-  }
-
-  function updateNote(text) {
-    setNotes((oldNotes) => {
-      const newArray = [];
-      for (let i = 0; i < oldNotes.length; i++) {
-        const oldNote = oldNotes[i];
-        if (oldNote.id === currentNoteId) {
-          // Put the most recently-modified note at the top
-          newArray.unshift({ ...oldNote, body: text });
-        } else {
-          newArray.push(oldNote);
-        }
-      }
-      return newArray;
+    const unsubscribe = onSnapshot(notesCollection, (snapshot) => {
+      const notesArr = snapshot.docs.map((doc) => ({
+        ...doc.data(),
+        id: doc.id,
+      }));
+      setNotes(notesArr);
     });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    if (!currentNoteId) {
+      setCurrentNoteId(notes[0]?.id);
+    }
+  }, [notes]);
+
+  useEffect(() => {
+    if (currentNote) {
+      setTempNoteText(currentNote.body);
+    }
+  }, [currentNote]);
+
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      if (tempNoteText !== currentNote.body) {
+        updateNote(tempNoteText);
+      }
+    }, 500);
+    return () => clearTimeout(timeoutId);
+  }, [tempNoteText]);
+
+  async function createNewNote() {
+    const newNote = {
+      body: "# Type your markdown note's title here",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const newNoteRef = await addDoc(notesCollection, newNote);
+    setCurrentNoteId(newNoteRef.id);
   }
 
-  function deleteNote(event, noteId) {
-    event.stopPropagation();
-    setNotes((oldNotes) => oldNotes.filter((note) => note.id !== noteId));
-  }
-
-  function findCurrentNote() {
-    return (
-      notes.find((note) => {
-        return note.id === currentNoteId;
-      }) || notes[0]
+  async function updateNote(text) {
+    const docRef = doc(database, "notes", currentNoteId);
+    await setDoc(
+      docRef,
+      { body: text, updatedAt: Date.now() },
+      { merge: true }
     );
+  }
+
+  async function deleteNote(noteId) {
+    const docRef = doc(database, "notes", noteId);
+    await deleteDoc(docRef);
   }
 
   return (
@@ -61,15 +77,16 @@ export default function App() {
       {notes.length > 0 ? (
         <Split sizes={[30, 70]} direction="horizontal" className="split">
           <Sidebar
-            notes={notes}
-            currentNote={findCurrentNote()}
+            notes={sortedNotes}
+            currentNote={currentNote}
             setCurrentNoteId={setCurrentNoteId}
             newNote={createNewNote}
             deleteNote={deleteNote}
           />
-          {currentNoteId && notes.length > 0 && (
-            <Editor currentNote={findCurrentNote()} updateNote={updateNote} />
-          )}
+          <Editor
+            tempNoteText={tempNoteText}
+            setTempNoteText={setTempNoteText}
+          />
         </Split>
       ) : (
         <div className="no-notes">
